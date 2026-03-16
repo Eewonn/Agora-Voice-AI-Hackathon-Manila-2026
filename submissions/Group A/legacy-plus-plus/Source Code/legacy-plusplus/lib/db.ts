@@ -1,13 +1,9 @@
 import { createClient } from "@/lib/supabase";
-import type { SessionScore, FeedbackChip } from "@/types";
+import type { SessionScore, FeedbackChip, WeekEntry } from "@/types";
 
 // ── Child Profile ──────────────────────────────────────────────
 
-export async function saveChildProfile(
-  parentId: string,
-  name: string,
-  age: number
-) {
+export async function saveChildProfile(parentId: string, name: string, age: number) {
   const supabase = createClient();
   const ageGroup = age <= 7 ? "early" : age <= 10 ? "growing" : "preteen";
 
@@ -31,7 +27,7 @@ export async function getChildProfile(parentId: string) {
     .limit(1)
     .single();
 
-  if (error && error.code !== "PGRST116") throw error; // PGRST116 = no rows
+  if (error && error.code !== "PGRST116") throw error;
   return data ?? null;
 }
 
@@ -40,7 +36,6 @@ export async function getChildProfile(parentId: string) {
 export async function saveConsent(parentId: string, parentName: string) {
   const supabase = createClient();
 
-  // Check if consent already exists
   const { data: existing } = await supabase
     .from("consents")
     .select("id")
@@ -48,14 +43,12 @@ export async function saveConsent(parentId: string, parentName: string) {
     .single();
 
   if (existing) {
-    // Update existing record
     const { error } = await supabase
       .from("consents")
       .update({ parent_name: parentName, given: true, given_at: new Date().toISOString() })
       .eq("parent_id", parentId);
     if (error) { console.error("saveConsent update error:", error); throw error; }
   } else {
-    // Insert new record
     const { error } = await supabase.from("consents").insert({
       parent_id: parentId,
       parent_name: parentName,
@@ -78,32 +71,27 @@ export async function hasConsent(parentId: string): Promise<boolean> {
 
 // ── Sessions ───────────────────────────────────────────────────
 
-export async function startSession(
-  childId: string,
-  parentId: string,
-  totalPrompts: number
-) {
+export async function startSession(childId: string, parentId: string, totalPrompts: number) {
   const supabase = createClient();
+  const now = new Date().toISOString();
+
   const { data, error } = await supabase
     .from("sessions")
     .insert({
       child_id: childId,
       parent_id: parentId,
       total_prompts: totalPrompts,
-      started_at: new Date().toISOString(),
+      started_at: now,
     })
     .select()
     .single();
 
   if (error) throw error;
-  return data;
+  // Return both the DB row and the timestamp used, so the caller has one source of truth
+  return { ...data, started_at: now } as { id: string; started_at: string };
 }
 
-export async function endSession(
-  sessionId: string,
-  promptsCompleted: number,
-  startedAt: string
-) {
+export async function endSession(sessionId: string, promptsCompleted: number, startedAt: string) {
   const supabase = createClient();
   const endedAt = new Date().toISOString();
   const durationSeconds = Math.round(
@@ -112,21 +100,13 @@ export async function endSession(
 
   const { error } = await supabase
     .from("sessions")
-    .update({
-      ended_at: endedAt,
-      duration_seconds: durationSeconds,
-      prompts_completed: promptsCompleted,
-      completed: true,
-    })
+    .update({ ended_at: endedAt, duration_seconds: durationSeconds, prompts_completed: promptsCompleted, completed: true })
     .eq("id", sessionId);
 
   if (error) throw error;
 }
 
-export async function saveSessionScores(
-  sessionId: string,
-  scores: SessionScore
-) {
+export async function saveSessionScores(sessionId: string, scores: SessionScore) {
   const supabase = createClient();
   const { error } = await supabase.from("session_scores").insert({
     session_id: sessionId,
@@ -134,14 +114,13 @@ export async function saveSessionScores(
     fluency: scores.fluency,
     articulation: scores.articulation,
     confidence: scores.confidence,
+    // overall is a generated column on the DB side; no need to insert it
   });
   if (error) throw error;
 }
 
-export async function saveFeedbackEvents(
-  sessionId: string,
-  events: FeedbackChip[]
-) {
+export async function saveFeedbackEvents(sessionId: string, events: FeedbackChip[]) {
+  if (events.length === 0) return; // Guard against empty insert
   const supabase = createClient();
   const rows = events.map((e, i) => ({
     session_id: sessionId,
@@ -171,28 +150,42 @@ export async function saveRecommendation(
 
 // ── Dashboard ──────────────────────────────────────────────────
 
-export async function getWeekHistory(childId: string) {
+const DAY_LABELS = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
+
+export async function getWeekHistory(childId: string): Promise<WeekEntry[]> {
   const supabase = createClient();
   const sevenDaysAgo = new Date();
   sevenDaysAgo.setDate(sevenDaysAgo.getDate() - 6);
+  sevenDaysAgo.setHours(0, 0, 0, 0);
 
   const { data, error } = await supabase
     .from("sessions")
-    .select(`
-      id,
-      started_at,
-      completed,
-      prompts_completed,
-      total_prompts,
-      session_scores (overall)
-    `)
+    .select(`id, started_at, completed, prompts_completed, total_prompts, session_scores (pronunciation, fluency, articulation, confidence)`)
     .eq("child_id", childId)
     .eq("completed", true)
     .gte("started_at", sevenDaysAgo.toISOString())
     .order("started_at", { ascending: true });
 
   if (error) throw error;
-  return data ?? [];
+
+  const today = new Date();
+  return Array.from({ length: 7 }, (_, i): WeekEntry => {
+    const d = new Date(today);
+    d.setDate(today.getDate() - (6 - i));
+    const label = i === 6 ? "Today" : DAY_LABELS[d.getDay()];
+    const dateStr = d.toISOString().split("T")[0];
+
+    type RawSession = { started_at: string; session_scores: { pronunciation: number; fluency: number; articulation: number; confidence: number }[] };
+    const session = (data as RawSession[]).find((s) => s.started_at.startsWith(dateStr));
+
+    let score = 0;
+    if (session?.session_scores?.[0]) {
+      const s = session.session_scores[0];
+      score = Math.round((s.pronunciation + s.fluency + s.articulation + s.confidence) / 4);
+    }
+
+    return { day: label, score, completed: !!session };
+  });
 }
 
 export async function getLatestSession(childId: string) {
@@ -204,7 +197,7 @@ export async function getLatestSession(childId: string) {
       started_at,
       prompts_completed,
       total_prompts,
-      session_scores (pronunciation, fluency, articulation, confidence, overall),
+      session_scores (pronunciation, fluency, articulation, confidence),
       feedback_events (type, message),
       practice_recommendations (weakest_area, drill_text)
     `)

@@ -2,9 +2,7 @@
 
 import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
-import { Star, ChevronRight, Home } from "lucide-react";
-import Button from "@/components/ui/Button";
-import { Card } from "@/components/ui/Card";
+import { Star, Home, RotateCcw, ChevronRight } from "lucide-react";
 import ProgressBar from "@/components/ui/ProgressBar";
 import type { SessionScore, FeedbackChip } from "@/types";
 
@@ -17,12 +15,18 @@ interface SessionResult {
 
 const NEXT_DRILLS: Record<string, string> = {
   pronunciation: "Practice slow, deliberate speaking with the R and S drill",
-  fluency: "Try reading a short sentence out loud three times smoothly",
-  articulation: "Focus on ending sounds — practice words ending in -ck and -t",
-  confidence: "Record yourself saying a tongue twister and play it back",
+  fluency:       "Try reading a short sentence out loud three times smoothly",
+  articulation:  "Focus on ending sounds — practice words ending in -ck and -t",
+  confidence:    "Record yourself saying a tongue twister and play it back",
 };
 
-function getStarCount(avg: number): number {
+const BY_STARS = [
+  { heading: "Keep it up!", sub: "Every practice makes you stronger 💪", mascot: "🦕", bg: "from-warning/20 to-bg" },
+  { heading: "Nice work!",  sub: "You're getting better every day 🌟",   mascot: "🌟", bg: "from-primary/20 to-bg" },
+  { heading: "You crushed it!", sub: "That was an amazing session! 🏆",  mascot: "🏆", bg: "from-success/25 to-bg" },
+];
+
+function stars(avg: number) {
   if (avg >= 85) return 3;
   if (avg >= 70) return 2;
   return 1;
@@ -30,167 +34,147 @@ function getStarCount(avg: number): number {
 
 export default function ReportCardPage() {
   const router = useRouter();
-  const [result, setResult] = useState<SessionResult | null>(null);
-  const [profile, setProfile] = useState<{ childName: string } | null>(null);
+  const [result,  setResult]  = useState<SessionResult | null>(null);
+  const [name,    setName]    = useState("you");
+  const [visible, setVisible] = useState(false);
 
   useEffect(() => {
     const session = localStorage.getItem("legacypp_session");
-    const prof = localStorage.getItem("legacypp_profile");
-    if (!session || !prof) {
-      router.replace("/");
-      return;
-    }
+    const prof    = localStorage.getItem("legacypp_profile");
+    if (!session || !prof) { router.replace("/"); return; }
     setResult(JSON.parse(session));
-    setProfile(JSON.parse(prof));
+    setName(JSON.parse(prof).childName || "you");
+    // Slight delay so animations fire after mount
+    setTimeout(() => setVisible(true), 50);
   }, [router]);
 
-  if (!result || !profile) return null;
+  if (!result) return null;
 
   const { scores } = result;
-  const avg = Math.round(
-    (scores.pronunciation + scores.fluency + scores.articulation + scores.confidence) / 4
-  );
-  const stars = getStarCount(avg);
+  const avg  = Math.round((scores.pronunciation + scores.fluency + scores.articulation + scores.confidence) / 4);
+  const s    = stars(avg);
+  const info = BY_STARS[s - 1];
+  const xpGained = result.promptsCompleted * 10 + (s * 5);
 
-  // Find weakest area for next drill
-  const scoreEntries = [
-    ["pronunciation", scores.pronunciation],
-    ["fluency", scores.fluency],
-    ["articulation", scores.articulation],
-    ["confidence", scores.confidence],
-  ] as [string, number][];
-  const weakest = scoreEntries.reduce((a, b) => (b[1] < a[1] ? b : a))[0];
-  const nextDrill = NEXT_DRILLS[weakest];
+  const entries = Object.entries(scores) as [keyof SessionScore, number][];
+  const weakest = entries.reduce((a, b) => b[1] < a[1] ? b : a)[0];
 
   return (
-    <main className="min-h-screen bg-bg flex flex-col items-center justify-center px-4 py-12">
-      <div className="w-full max-w-lg">
-        {/* Stars celebration */}
-        <div className="text-center mb-8">
-          <div className="flex justify-center gap-2 mb-3">
-            {[1, 2, 3].map((s) => (
-              <Star
-                key={s}
-                size={40}
-                className={s <= stars ? "text-accent fill-accent" : "text-border"}
-              />
-            ))}
-          </div>
-          <h1 className="font-heading font-extrabold text-3xl text-text mb-1">
-            {stars === 3
-              ? "Amazing job!"
-              : stars === 2
-              ? "Great effort!"
-              : "Keep it up!"}
-          </h1>
-          <p className="text-muted font-body">
-            {profile.childName} completed {result.promptsCompleted} of{" "}
-            {result.totalPrompts} prompts
-          </p>
+    <div className="min-h-screen bg-bg flex flex-col">
+
+      {/* ── Celebration hero ──────────────────────────────── */}
+      <div className={`bg-gradient-to-b ${info.bg} pt-10 pb-8 px-5 flex flex-col items-center text-center`}>
+
+        {/* Mascot */}
+        <div
+          className={`text-9xl mb-4 select-none ${visible ? "animate-bounce-in" : "opacity-0"}`}
+        >
+          {info.mascot}
         </div>
 
-        {/* Score breakdown */}
-        <Card elevated className="mb-6">
-          <h2 className="font-heading font-bold text-lg text-text mb-4">
-            Session Scores
-          </h2>
-          <div className="space-y-4">
-            <ProgressBar
-              value={scores.pronunciation}
-              label="Clarity"
-              color="primary"
-            />
-            <ProgressBar
-              value={scores.fluency}
-              label="Smoothness"
-              color="success"
-            />
-            <ProgressBar
-              value={scores.articulation}
-              label="Articulation"
-              color="secondary"
-            />
-            <ProgressBar
-              value={scores.confidence}
-              label="Confidence"
-              color="accent"
-            />
-          </div>
+        {/* Heading */}
+        <h1
+          className={`font-heading font-extrabold text-4xl text-text mb-1 ${visible ? "animate-pop-up" : "opacity-0"}`}
+          style={{ animationDelay: "0.15s" }}
+        >
+          {info.heading}
+        </h1>
+        <p
+          className={`font-body text-muted text-base mb-5 ${visible ? "animate-pop-up" : "opacity-0"}`}
+          style={{ animationDelay: "0.25s" }}
+        >
+          {name} completed {result.promptsCompleted} of {result.totalPrompts} phrases
+        </p>
 
-          <div className="mt-4 pt-4 border-t border-border flex justify-between items-center">
-            <span className="text-sm font-body text-muted">Overall</span>
-            <span className="font-heading font-bold text-2xl text-primary">
-              {avg}%
-            </span>
+        {/* Stars row */}
+        <div
+          className={`flex gap-3 mb-6 ${visible ? "animate-pop-up" : "opacity-0"}`}
+          style={{ animationDelay: "0.3s" }}
+        >
+          {[1, 2, 3].map((n) => (
+            <Star
+              key={n}
+              size={52}
+              strokeWidth={1.5}
+              className={`transition-all ${
+                n <= s
+                  ? "text-accent fill-accent drop-shadow-[0_3px_8px_rgba(245,158,11,0.5)]"
+                  : "text-border fill-border"
+              } ${visible && n <= s ? `animate-star-pop delay-${n * 100}` : ""}`}
+            />
+          ))}
+        </div>
+
+        {/* XP badge */}
+        <div
+          className={`flex items-center gap-3 bg-surface border-2 border-accent/30 rounded-2xl px-6 py-3 shadow-md ${visible ? "animate-slide-up" : "opacity-0"}`}
+          style={{ animationDelay: "0.5s" }}
+        >
+          <span className="text-2xl select-none">⚡</span>
+          <div className="text-left">
+            <p className="font-heading font-extrabold text-2xl text-accent">+{xpGained} XP</p>
+            <p className="font-body text-xs text-muted">Great session, {name}!</p>
           </div>
-        </Card>
+        </div>
+      </div>
+
+      {/* ── Score breakdown ────────────────────────────────── */}
+      <div className="flex-1 px-5 pt-6 pb-8 max-w-lg mx-auto w-full space-y-4">
+
+        {/* Skill scores */}
+        <div className="bg-surface rounded-3xl border-2 border-border p-5 shadow-sm">
+          <h2 className="font-heading font-extrabold text-lg text-text mb-4">How did you do?</h2>
+          <div className="space-y-4">
+            <ProgressBar value={scores.pronunciation} label="Clarity"       color="primary"   />
+            <ProgressBar value={scores.fluency}       label="Smoothness"    color="success"   />
+            <ProgressBar value={scores.articulation}  label="Articulation"  color="secondary" />
+            <ProgressBar value={scores.confidence}    label="Confidence"    color="accent"    />
+          </div>
+          <div className="mt-4 pt-4 border-t-2 border-border flex items-center justify-between">
+            <span className="font-body text-muted text-sm">Overall score</span>
+            <span className="font-heading font-extrabold text-3xl text-primary">{avg}%</span>
+          </div>
+        </div>
 
         {/* Next drill */}
-        <Card className="mb-6 border-2 border-accent/20 bg-accent/5">
-          <div className="flex items-start gap-3">
-            <span className="text-2xl mt-0.5">🎯</span>
-            <div>
-              <p className="text-xs font-data font-bold text-accent uppercase mb-1">
-                Next Recommended Drill
-              </p>
-              <p className="text-sm font-body text-text">{nextDrill}</p>
-            </div>
-          </div>
-        </Card>
-
-        {/* Feedback highlights */}
-        {result.feedbackEvents.length > 0 && (
-          <Card className="mb-6">
-            <p className="text-xs font-data font-bold text-muted uppercase mb-3">
-              Session Highlights
+        <div className="bg-accent/8 border-2 border-accent/30 rounded-3xl p-4 flex items-start gap-3">
+          <span className="text-2xl shrink-0 mt-0.5">🎯</span>
+          <div>
+            <p className="font-heading font-extrabold text-sm text-accent uppercase tracking-wide mb-1">
+              Next Drill
             </p>
-            <div className="flex flex-wrap gap-2">
-              {result.feedbackEvents.slice(0, 5).map((chip, i) => (
-                <span
-                  key={i}
-                  className={
-                    chip.type === "success"
-                      ? "bg-success/10 text-success text-xs font-body px-3 py-1 rounded-full border border-success/20"
-                      : chip.type === "tip"
-                      ? "bg-accent/10 text-amber-700 text-xs font-body px-3 py-1 rounded-full border border-accent/20"
-                      : "bg-warning/10 text-warning text-xs font-body px-3 py-1 rounded-full border border-warning/20"
-                  }
-                >
-                  {chip.message}
-                </span>
-              ))}
-            </div>
-          </Card>
-        )}
-
-        {/* Actions */}
-        <div className="flex gap-3">
-          <Button
-            variant="ghost"
-            size="lg"
-            className="flex-1"
-            onClick={() => router.push("/child/home")}
-          >
-            <Home size={18} /> Home
-          </Button>
-          <Button
-            size="lg"
-            className="flex-1"
-            onClick={() => router.push("/practice")}
-          >
-            Practice Again <ChevronRight size={18} />
-          </Button>
+            <p className="font-body text-sm text-text leading-relaxed">
+              {NEXT_DRILLS[weakest]}
+            </p>
+          </div>
         </div>
 
-        <div className="text-center mt-4">
+        {/* Actions */}
+        <div className="grid grid-cols-2 gap-3 pt-2">
+          <button
+            onClick={() => router.push("/child/home")}
+            className="btn-3d flex items-center justify-center gap-2 bg-surface border-2 border-border text-text py-4 rounded-2xl font-heading font-bold text-sm shadow-[0_3px_0_#CBD5E1] hover:border-primary hover:text-primary"
+          >
+            <Home size={18} /> Home
+          </button>
+          <button
+            onClick={() => router.push("/practice")}
+            className="btn-3d flex items-center justify-center gap-2 bg-primary text-white py-4 rounded-2xl font-heading font-extrabold text-sm shadow-[0_4px_0_#0b8a8b]"
+          >
+            <RotateCcw size={16} /> Play Again <ChevronRight size={16} />
+          </button>
+        </div>
+
+        {/* Parent link */}
+        <p className="text-center text-sm font-body text-muted">
           <button
             onClick={() => router.push("/parent/dashboard")}
-            className="text-sm font-body text-muted hover:text-primary transition-colors underline underline-offset-2"
+            className="text-primary font-semibold hover:underline underline-offset-2"
           >
             View parent dashboard →
           </button>
-        </div>
+        </p>
       </div>
-    </main>
+    </div>
   );
 }

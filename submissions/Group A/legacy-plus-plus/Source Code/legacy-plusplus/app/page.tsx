@@ -6,9 +6,11 @@ import { ShieldCheck, ChevronRight, Mic, TrendingUp, Heart } from "lucide-react"
 import { useAuth } from "@/context/AuthContext";
 import { saveConsent, saveChildProfile, getChildProfile, hasConsent } from "@/lib/db";
 import Button from "@/components/ui/Button";
+import Input from "@/components/ui/Input";
 import { Card } from "@/components/ui/Card";
+import type { StoredProfile } from "@/types";
 
-type Step = "landing" | "consent" | "profile" | "loading";
+type Step = "loading" | "landing" | "consent" | "profile";
 
 export default function ParentGatePage() {
   const router = useRouter();
@@ -22,16 +24,10 @@ export default function ParentGatePage() {
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
 
-  // Determine which step to show once auth is resolved
   useEffect(() => {
     if (authLoading) return;
+    if (!user) { router.replace("/auth"); return; }
 
-    if (!user) {
-      router.replace("/auth");
-      return;
-    }
-
-    // Check if profile + consent already exist
     (async () => {
       const [profile, consent] = await Promise.all([
         getChildProfile(user.id),
@@ -39,16 +35,13 @@ export default function ParentGatePage() {
       ]);
 
       if (profile && consent) {
-        // Already set up — go straight to child home
-        localStorage.setItem(
-          "legacypp_profile",
-          JSON.stringify({
-            childId: profile.id,
-            childName: profile.name,
-            childAge: profile.age,
-            parentName: "",
-          })
-        );
+        const stored: StoredProfile = {
+          childId: profile.id,
+          childName: profile.name,
+          childAge: profile.age,
+          parentName: "",
+        };
+        localStorage.setItem("legacypp_profile", JSON.stringify(stored));
         router.replace("/child/home");
       } else if (!consent) {
         setStep("landing");
@@ -61,6 +54,7 @@ export default function ParentGatePage() {
   const handleConsent = async () => {
     if (!consentGiven || !user) return;
     setSaving(true);
+    setError("");
     try {
       await saveConsent(user.id, parentName || "Parent");
       setStep("profile");
@@ -77,15 +71,13 @@ export default function ParentGatePage() {
     setError("");
     try {
       const profile = await saveChildProfile(user.id, childName, parseInt(childAge));
-      localStorage.setItem(
-        "legacypp_profile",
-        JSON.stringify({
-          childId: profile.id,
-          childName: profile.name,
-          childAge: profile.age,
-          parentName,
-        })
-      );
+      const stored: StoredProfile = {
+        childId: profile.id,
+        childName: profile.name,
+        childAge: profile.age,
+        parentName,
+      };
+      localStorage.setItem("legacypp_profile", JSON.stringify(stored));
       router.push("/child/home");
     } catch {
       setError("Could not save profile. Please try again.");
@@ -99,11 +91,7 @@ export default function ParentGatePage() {
       <main className="min-h-screen bg-bg flex items-center justify-center">
         <div className="flex gap-1">
           {[0, 1, 2].map((i) => (
-            <div
-              key={i}
-              className="w-3 h-3 bg-primary rounded-full animate-bounce"
-              style={{ animationDelay: `${i * 150}ms` }}
-            />
+            <div key={i} className="w-3 h-3 bg-primary rounded-full animate-bounce" style={{ animationDelay: `${i * 150}ms` }} />
           ))}
         </div>
       </main>
@@ -134,21 +122,9 @@ export default function ParentGatePage() {
 
         <div className="grid grid-cols-1 md:grid-cols-3 gap-6 max-w-4xl w-full">
           {[
-            {
-              icon: <Mic className="text-primary" size={28} />,
-              title: "Real-Time Voice AI",
-              desc: "Instant pronunciation feedback after every attempt — friendly, never punishing.",
-            },
-            {
-              icon: <TrendingUp className="text-success" size={28} />,
-              title: "Progress Tracking",
-              desc: "Weekly trend charts and session report cards parents can actually understand.",
-            },
-            {
-              icon: <Heart className="text-error" size={28} />,
-              title: "Child-Safe by Design",
-              desc: "Parent consent gate, role-based access, and data deletion on request.",
-            },
+            { icon: <Mic className="text-primary" size={28} />, title: "Real-Time Voice AI", desc: "Instant pronunciation feedback after every attempt — friendly, never punishing." },
+            { icon: <TrendingUp className="text-success" size={28} />, title: "Progress Tracking", desc: "Weekly trend charts and session report cards parents can actually understand." },
+            { icon: <Heart className="text-error" size={28} />, title: "Child-Safe by Design", desc: "Parent consent gate, role-based access, and data deletion on request." },
           ].map((f) => (
             <Card key={f.title} elevated className="text-center">
               <div className="flex justify-center mb-3">{f.icon}</div>
@@ -165,32 +141,25 @@ export default function ParentGatePage() {
     return (
       <main className="min-h-screen bg-bg flex items-center justify-center px-4 py-16">
         <Card elevated className="max-w-lg w-full">
-          <div className="flex items-center gap-3 bg-success/10 border border-success/30 rounded-xl px-4 py-3 mb-6">
+          <div className="flex items-center gap-3 bg-success/10 border border-success/20 rounded-xl px-4 py-3 mb-6">
             <ShieldCheck className="text-success shrink-0" size={22} />
             <p className="text-sm font-body text-success font-medium">
               Your child&apos;s data is encrypted, never sold, and deletable on request.
             </p>
           </div>
 
-          <h2 className="font-heading font-bold text-2xl text-text mb-2">
-            Parent Consent
-          </h2>
+          <h2 className="font-heading font-bold text-2xl text-text mb-2">Parent Consent</h2>
           <p className="text-muted font-body mb-4 text-sm leading-relaxed">
-            Legacy++ is an assistive practice tool — not a medical device or
-            diagnostic authority. By continuing, you confirm you are the parent
-            or legal guardian.
+            Legacy++ is an assistive practice tool — not a medical device or diagnostic authority.
+            By continuing, you confirm you are the parent or legal guardian.
           </p>
 
           <div className="mb-4">
-            <label className="block text-sm font-body font-semibold text-text mb-1">
-              Your name
-            </label>
-            <input
-              type="text"
+            <Input
+              label="Your name"
               value={parentName}
               onChange={(e) => setParentName(e.target.value)}
               placeholder="e.g. Maria Santos"
-              className="w-full border border-border rounded-xl px-4 py-3 text-text font-body text-sm focus:outline-none focus:ring-2 focus:ring-primary bg-surface"
             />
           </div>
 
@@ -202,7 +171,7 @@ export default function ParentGatePage() {
               "Children under 13 require parent supervision",
             ].map((item) => (
               <li key={item} className="flex items-start gap-2">
-                <span className="text-success mt-0.5">✓</span>
+                <ShieldCheck size={14} className="text-success mt-0.5 shrink-0" />
                 {item}
               </li>
             ))}
@@ -216,21 +185,13 @@ export default function ParentGatePage() {
               className="mt-0.5 w-5 h-5 accent-primary cursor-pointer"
             />
             <span className="text-sm font-body text-text">
-              I am the parent/guardian and I consent to my child using Legacy++
-              under my supervision.
+              I am the parent/guardian and I consent to my child using Legacy++ under my supervision.
             </span>
           </label>
 
-          {error && (
-            <p className="text-error text-sm font-body mb-4">{error}</p>
-          )}
+          {error && <p className="text-error text-sm font-body mb-4">{error}</p>}
 
-          <Button
-            size="lg"
-            className="w-full"
-            disabled={!consentGiven || saving}
-            onClick={handleConsent}
-          >
+          <Button size="lg" className="w-full" disabled={!consentGiven || saving} onClick={handleConsent}>
             {saving ? "Saving…" : "Continue"} <ChevronRight size={18} />
           </Button>
         </Card>
@@ -250,18 +211,12 @@ export default function ParentGatePage() {
         </p>
 
         <div className="space-y-4">
-          <div>
-            <label className="block text-sm font-body font-semibold text-text mb-1">
-              Child&apos;s first name
-            </label>
-            <input
-              type="text"
-              value={childName}
-              onChange={(e) => setChildName(e.target.value)}
-              placeholder="e.g. Luisa"
-              className="w-full border border-border rounded-xl px-4 py-3 text-text font-body text-sm focus:outline-none focus:ring-2 focus:ring-primary bg-surface"
-            />
-          </div>
+          <Input
+            label="Child's first name"
+            value={childName}
+            onChange={(e) => setChildName(e.target.value)}
+            placeholder="e.g. Luisa"
+          />
 
           <div>
             <label className="block text-sm font-body font-semibold text-text mb-1">
@@ -270,21 +225,17 @@ export default function ParentGatePage() {
             <select
               value={childAge}
               onChange={(e) => setChildAge(e.target.value)}
-              className="w-full border border-border rounded-xl px-4 py-3 text-text font-body text-sm focus:outline-none focus:ring-2 focus:ring-primary bg-surface"
+              className="w-full border border-border rounded-xl px-4 py-3 text-text font-body text-sm focus:outline-none focus:ring-2 focus:ring-primary bg-surface transition-shadow duration-150"
             >
               <option value="">Select age…</option>
               {Array.from({ length: 9 }, (_, i) => i + 5).map((age) => (
-                <option key={age} value={age}>
-                  {age} years old
-                </option>
+                <option key={age} value={age}>{age} years old</option>
               ))}
             </select>
           </div>
         </div>
 
-        {error && (
-          <p className="text-error text-sm font-body mt-3">{error}</p>
-        )}
+        {error && <p className="text-error text-sm font-body mt-3">{error}</p>}
 
         <Button
           size="lg"
@@ -292,8 +243,7 @@ export default function ParentGatePage() {
           disabled={!childName || !childAge || saving}
           onClick={handleStart}
         >
-          {saving ? "Saving…" : "Start Practice Session"}{" "}
-          <ChevronRight size={18} />
+          {saving ? "Saving…" : "Start Practice Session"} <ChevronRight size={18} />
         </Button>
       </Card>
     </main>

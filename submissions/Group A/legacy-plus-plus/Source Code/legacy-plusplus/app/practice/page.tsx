@@ -7,7 +7,7 @@ import type {
   IMicrophoneAudioTrack,
   IAgoraRTCRemoteUser,
 } from "agora-rtc-sdk-ng";
-import { Mic, MicOff, SkipForward, RotateCcw, X, Volume2 } from "lucide-react";
+import { Mic, MicOff, SkipForward, RotateCcw, X, Volume2, Heart } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { useAuth } from "@/context/AuthContext";
 import {
@@ -17,8 +17,6 @@ import {
   saveFeedbackEvents,
   saveRecommendation,
 } from "@/lib/db";
-import Button from "@/components/ui/Button";
-import { Card } from "@/components/ui/Card";
 import { getPromptsForAge, getAgeGroup, type Prompt } from "@/lib/prompts";
 import type { FeedbackChip, SessionScore } from "@/types";
 
@@ -26,20 +24,19 @@ type MicState = "idle" | "listening" | "processing" | "done";
 
 const NEXT_DRILLS: Record<string, string> = {
   pronunciation: "Practice slow, deliberate speaking with the R and S drill",
-  fluency: "Try reading a short sentence out loud three times smoothly",
-  articulation: "Focus on ending sounds — practice words ending in -ck and -t",
-  confidence: "Record yourself saying a tongue twister and play it back",
+  fluency:       "Try reading a short sentence out loud three times smoothly",
+  articulation:  "Focus on ending sounds — practice words ending in -ck and -t",
+  confidence:    "Record yourself saying a tongue twister and play it back",
 };
 
-// Simple heuristic scoring based on how long child spoke
 function scoreFromDuration(durationMs: number): SessionScore {
   const base = Math.min(100, 60 + Math.floor(durationMs / 200));
-  const variance = () => Math.floor(Math.random() * 10) - 5;
+  const v    = () => Math.floor(Math.random() * 10) - 5;
   return {
-    pronunciation: Math.min(100, Math.max(40, base + variance())),
-    fluency: Math.min(100, Math.max(40, base - 5 + variance())),
-    articulation: Math.min(100, Math.max(40, base - 3 + variance())),
-    confidence: Math.min(100, Math.max(40, base + 5 + variance())),
+    pronunciation: Math.min(100, Math.max(40, base     + v())),
+    fluency:       Math.min(100, Math.max(40, base - 5 + v())),
+    articulation:  Math.min(100, Math.max(40, base - 3 + v())),
+    confidence:    Math.min(100, Math.max(40, base + 5 + v())),
   };
 }
 
@@ -49,158 +46,152 @@ export default function PracticePage() {
   const router = useRouter();
   const { user } = useAuth();
 
-  const [prompts, setPrompts] = useState<Prompt[]>([]);
-  const [currentIndex, setCurrentIndex] = useState(0);
-  const [micState, setMicState] = useState<MicState>("idle");
-  const [allFeedback, setAllFeedback] = useState<FeedbackChip[]>([]);
-  const [scores, setScores] = useState<SessionScore[]>([]);
-  const [sessionId, setSessionId] = useState<string | null>(null);
+  const [prompts,          setPrompts]          = useState<Prompt[]>([]);
+  const [currentIndex,     setCurrentIndex]     = useState(0);
+  const [micState,         setMicState]         = useState<MicState>("idle");
+  const [allFeedback,      setAllFeedback]      = useState<FeedbackChip[]>([]);
+  const [scores,           setScores]           = useState<SessionScore[]>([]);
+  const [sessionId,        setSessionId]        = useState<string | null>(null);
   const [sessionStartedAt, setSessionStartedAt] = useState("");
-  const [agentSpeaking, setAgentSpeaking] = useState(false);
-  const [agentId, setAgentId] = useState<string | null>(null);
-  const [agoraReady, setAgoraReady] = useState(false);
-  const [speakStartTime, setSpeakStartTime] = useState(0);
+  const [agentSpeaking,    setAgentSpeaking]    = useState(false);
+  const [agentId,          setAgentId]          = useState<string | null>(null);
+  const [agoraReady,       setAgoraReady]       = useState(false);
+  const [speakStartTime,   setSpeakStartTime]   = useState(0);
+  const [childName,        setChildName]        = useState("there");
+  const [lives,            setLives]            = useState(3);
+  const [sessionStarted,   setSessionStarted]   = useState(false);
 
-  const clientRef = useRef<IAgoraRTCClient | null>(null);
-  const micTrackRef = useRef<IMicrophoneAudioTrack | null>(null);
-  const speakTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const clientRef        = useRef<IAgoraRTCClient | null>(null);
+  const micTrackRef      = useRef<IMicrophoneAudioTrack | null>(null);
+  const speakTimerRef    = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const initStartedRef   = useRef(false);
+  const profileRef       = useRef<{ childId?: string; childAge?: number; childName?: string } | null>(null);
+  const channelRef       = useRef("");
+  const userUidRef       = useRef(0);
 
-  // ── Init Agora + start session ──────────────────────────────
+  // Phase 1: load profile & prompts (no Agora, no audio)
   useEffect(() => {
-    const stored = localStorage.getItem("legacypp_profile");
-    if (!stored) { router.replace("/"); return; }
-    const profile = JSON.parse(stored);
-    const ageGroup = getAgeGroup(profile.childAge);
+    const raw = localStorage.getItem("legacypp_profile");
+    if (!raw) { router.replace("/"); return; }
+    const profile = JSON.parse(raw);
+    profileRef.current = profile;
+    setChildName(profile.childName || "there");
+
+    const ageGroup       = getAgeGroup(profile.childAge);
     const sessionPrompts = getPromptsForAge(ageGroup, 5);
     setPrompts(sessionPrompts);
 
     const channelName = `session-${profile.childId ?? "demo"}-${Date.now()}`;
+    const userUid     = Math.floor(Math.random() * 100000) + 1;
+    channelRef.current  = channelName;
+    userUidRef.current  = userUid;
     localStorage.setItem("legacypp_channel", channelName);
-
-    const userUid = Math.floor(Math.random() * 100000) + 1;
     localStorage.setItem("legacypp_uid", String(userUid));
 
-    // Start Supabase session
+    return () => { cleanup(); };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [router]);
+
+  // Phase 2: init Agora — only called after user taps "Start" (satisfies browser autoplay policy)
+  const handleStart = async () => {
+    if (initStartedRef.current) return;
+    initStartedRef.current = true;
+    setSessionStarted(true);
+
+    const profile     = profileRef.current!;
+    const channelName = channelRef.current;
+    const userUid     = userUidRef.current;
+
     if (user && profile.childId) {
       const now = new Date().toISOString();
       setSessionStartedAt(now);
-      startSession(profile.childId, user.id, sessionPrompts.length)
+      startSession(profile.childId, user.id, prompts.length)
         .then((s) => setSessionId(s.id))
         .catch(console.error);
     }
 
-    // Init Agora client
-    const initAgora = async () => {
-      try {
-        const AgoraRTC = (await import("agora-rtc-sdk-ng")).default;
-        const client = AgoraRTC.createClient({ mode: "rtc", codec: "vp8" });
-        clientRef.current = client;
+    try {
+      const AgoraRTC = (await import("agora-rtc-sdk-ng")).default;
+      const client   = AgoraRTC.createClient({ mode: "rtc", codec: "vp8" });
+      clientRef.current = client;
 
-        // Listen for the AI agent joining and speaking
-        client.on("user-published", async (remoteUser: IAgoraRTCRemoteUser, mediaType: string) => {
-          if (mediaType === "audio") {
-            await client.subscribe(remoteUser, "audio");
-            remoteUser.audioTrack?.play();
-            setAgentSpeaking(true);
-          }
-        });
+      client.on("user-published", async (ru: IAgoraRTCRemoteUser, mt: string) => {
+        if (mt === "audio") {
+          await client.subscribe(ru, "audio");
+          ru.audioTrack?.play();
+          setAgentSpeaking(true);
+        }
+      });
+      client.on("user-unpublished", (_: IAgoraRTCRemoteUser, mt: string) => {
+        if (mt === "audio") setAgentSpeaking(false);
+      });
 
-        client.on("user-unpublished", (_: IAgoraRTCRemoteUser, mediaType: string) => {
-          if (mediaType === "audio") setAgentSpeaking(false);
-        });
+      const { token } = await fetch("/api/agora/token", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ channelName, uid: userUid }),
+      }).then((r) => r.json());
 
-        // Get token from our API
-        const tokenRes = await fetch("/api/agora/token", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ channelName, uid: userUid }),
-        });
-        const { token } = await tokenRes.json();
+      await client.join(APP_ID, channelName, token, userUid);
 
-        // Join channel
-        await client.join(APP_ID, channelName, token, userUid);
+      const micTrack = await AgoraRTC.createMicrophoneAudioTrack({
+        encoderConfig: "speech_low_quality",
+      });
+      micTrackRef.current = micTrack;
 
-        // Create mic track but don't publish yet
-        const micTrack = await AgoraRTC.createMicrophoneAudioTrack({ encoderConfig: "speech_low_quality" });
-        micTrackRef.current = micTrack;
+      const agentData = await fetch("/api/agora/agent", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ channelName, userUid, agentUid: 999, childAge: profile.childAge }),
+      }).then((r) => r.json());
+      if (agentData.agentId) setAgentId(agentData.agentId);
 
-        // Start AI agent
-        const agentRes = await fetch("/api/agora/agent", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            channelName,
-            userUid,
-            agentUid: 999,
-            childAge: profile.childAge,
-          }),
-        });
-        const agentData = await agentRes.json();
-        if (agentData.agentId) setAgentId(agentData.agentId);
-
-        setAgoraReady(true);
-      } catch (err) {
-        console.error("Agora init error:", err);
-        setAgoraReady(true); // Still allow practice with degraded mode
-      }
-    };
-
-    initAgora();
-
-    return () => {
-      cleanup();
-    };
-  }, [user, router]);
+      setAgoraReady(true);
+    } catch (err) {
+      console.error("Agora init error:", err);
+      setAgoraReady(true);
+    }
+  };
 
   const cleanup = async () => {
     if (speakTimerRef.current) clearTimeout(speakTimerRef.current);
-
-    // Stop mic
     if (micTrackRef.current) {
       micTrackRef.current.stop();
       micTrackRef.current.close();
       micTrackRef.current = null;
     }
-
-    // Stop agent
-    const storedAgentId = agentId;
-    if (storedAgentId) {
+    if (agentId) {
       fetch("/api/agora/agent", {
         method: "DELETE",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ agentId: storedAgentId }),
+        body: JSON.stringify({ agentId }),
       }).catch(console.error);
     }
-
-    // Leave channel
     if (clientRef.current) {
       await clientRef.current.leave().catch(console.error);
       clientRef.current = null;
     }
   };
 
-  // ── Mic controls ────────────────────────────────────────────
   const handleMicToggle = async () => {
     if (!micTrackRef.current) return;
 
     if (micState === "listening") {
-      // Stop speaking
       const duration = Date.now() - speakStartTime;
       await clientRef.current?.unpublish(micTrackRef.current);
       await micTrackRef.current.setEnabled(false);
       setMicState("processing");
 
-      // Score based on speaking duration + wait for agent response
       speakTimerRef.current = setTimeout(() => {
-        const score = scoreFromDuration(duration);
-        const chip: FeedbackChip = { type: "success", message: "Sparky is listening… 🎙️" };
-        setAllFeedback((prev) => [...prev, chip]);
+        const score: SessionScore = scoreFromDuration(duration);
+        setAllFeedback((prev) => [
+          ...prev,
+          { type: "success", message: "Sparky is listening… 🎙️" },
+        ]);
         setScores((prev) => [...prev, score]);
         setMicState("done");
       }, 800);
-
     } else if (micState === "idle" || micState === "done") {
-      // Start speaking
       try {
         await micTrackRef.current.setEnabled(true);
         await clientRef.current?.publish(micTrackRef.current);
@@ -213,28 +204,27 @@ export default function PracticePage() {
   };
 
   const handleRetry = () => {
+    setLives((l) => Math.max(0, l - 1));
     setMicState("idle");
   };
 
   const handleNext = useCallback(async () => {
     if (currentIndex + 1 >= prompts.length) {
-      // Session complete
       const avg = (arr: number[]) =>
         arr.length ? Math.round(arr.reduce((a, b) => a + b, 0) / arr.length) : 70;
 
       const finalScores: SessionScore = {
         pronunciation: avg(scores.map((s) => s.pronunciation)),
-        fluency: avg(scores.map((s) => s.fluency)),
-        articulation: avg(scores.map((s) => s.articulation)),
-        confidence: avg(scores.map((s) => s.confidence)),
+        fluency:       avg(scores.map((s) => s.fluency)),
+        articulation:  avg(scores.map((s) => s.articulation)),
+        confidence:    avg(scores.map((s) => s.confidence)),
       };
 
-      const scoreEntries = Object.entries(finalScores) as [keyof SessionScore, number][];
-      const weakest = scoreEntries.reduce((a, b) => (b[1] < a[1] ? b : a))[0];
+      const entries  = Object.entries(finalScores) as [keyof SessionScore, number][];
+      const weakest  = entries.reduce((a, b) => (b[1] < a[1] ? b : a))[0];
 
-      // Save to Supabase
       if (sessionId) {
-        const stored = localStorage.getItem("legacypp_profile");
+        const stored  = localStorage.getItem("legacypp_profile");
         const profile = stored ? JSON.parse(stored) : null;
         await Promise.all([
           endSession(sessionId, scores.length, sessionStartedAt),
@@ -246,21 +236,18 @@ export default function PracticePage() {
         ]).catch(console.error);
       }
 
-      localStorage.setItem(
-        "legacypp_session",
-        JSON.stringify({
-          scores: finalScores,
-          promptsCompleted: scores.length,
-          totalPrompts: prompts.length,
-          feedbackEvents: allFeedback,
-          weakest,
-        })
-      );
+      localStorage.setItem("legacypp_session", JSON.stringify({
+        scores: finalScores,
+        promptsCompleted: scores.length,
+        totalPrompts: prompts.length,
+        feedbackEvents: allFeedback,
+        weakest,
+      }));
 
       const streak = parseInt(localStorage.getItem("legacypp_streak") || "0");
-      const stars = parseInt(localStorage.getItem("legacypp_stars") || "0");
+      const stars  = parseInt(localStorage.getItem("legacypp_stars")  || "0");
       localStorage.setItem("legacypp_streak", String(streak + 1));
-      localStorage.setItem("legacypp_stars", String(stars + scores.length));
+      localStorage.setItem("legacypp_stars",  String(stars  + scores.length));
 
       await cleanup();
       router.push("/report");
@@ -272,145 +259,239 @@ export default function PracticePage() {
 
   if (prompts.length === 0) return null;
 
-  const currentPrompt = prompts[currentIndex];
-  const progress = (currentIndex / prompts.length) * 100;
-
-  return (
-    <main className="min-h-screen bg-bg flex flex-col items-center justify-center px-4 py-8">
-      <div className="w-full max-w-xl">
-        {/* Header */}
-        <div className="flex items-center justify-between mb-6">
-          <button
-            onClick={async () => { await cleanup(); router.push("/child/home"); }}
-            className="text-muted hover:text-error transition-colors p-1"
-          >
-            <X size={22} />
-          </button>
-          <span className="font-data text-sm text-muted">
-            {currentIndex + 1} / {prompts.length}
-          </span>
-          <div className="w-6" />
+  // ── Start screen (shown before any Agora audio is initialised) ──────────
+  if (!sessionStarted) {
+    return (
+      <div className="min-h-screen bg-bg flex flex-col items-center justify-center px-6 gap-8">
+        <div className="text-center">
+          <div className="text-8xl mb-4 select-none animate-bounce-in">🤖</div>
+          <h1 className="font-heading font-extrabold text-3xl text-text mb-2">
+            Ready to practice?
+          </h1>
+          <p className="font-body text-muted text-base">
+            Sparky will listen and cheer you on!
+          </p>
         </div>
 
-        {/* Progress dots */}
-        <div className="flex gap-2 justify-center mb-8">
+        <div className="bg-surface border-2 border-border rounded-3xl p-5 w-full max-w-sm space-y-3">
+          <div className="flex items-center gap-3">
+            <span className="text-2xl">🎯</span>
+            <p className="font-body text-sm text-text">{prompts.length} phrases to practice</p>
+          </div>
+          <div className="flex items-center gap-3">
+            <span className="text-2xl">❤️</span>
+            <p className="font-body text-sm text-text">3 lives — use them wisely!</p>
+          </div>
+          <div className="flex items-center gap-3">
+            <span className="text-2xl">🎤</span>
+            <p className="font-body text-sm text-text">Tap the mic when you&apos;re ready to speak</p>
+          </div>
+        </div>
+
+        <button
+          onClick={handleStart}
+          className="btn-3d w-full max-w-sm bg-primary text-white py-5 rounded-2xl font-heading font-extrabold text-xl shadow-[0_5px_0_#0b8a8b]"
+        >
+          Let&apos;s Go! 🚀
+        </button>
+
+        <button
+          onClick={() => router.push("/child/home")}
+          className="font-body text-sm text-muted hover:text-text"
+        >
+          ← Back to home
+        </button>
+      </div>
+    );
+  }
+
+  const prompt   = prompts[currentIndex];
+  const isLast   = currentIndex + 1 >= prompts.length;
+  const disabled = micState === "processing" || !agoraReady || agentSpeaking;
+
+  return (
+    <div className="min-h-screen bg-bg flex flex-col">
+
+      {/* ── Header ────────────────────────────────────────── */}
+      <header className="bg-surface border-b-2 border-border px-4 pt-4 pb-3">
+        {/* Top row: exit + lives */}
+        <div className="flex items-center justify-between mb-3">
+          <button
+            onClick={async () => { await cleanup(); router.push("/child/home"); }}
+            className="w-9 h-9 rounded-xl bg-bg border-2 border-border flex items-center justify-center text-muted hover:text-error hover:border-error transition-colors"
+          >
+            <X size={18} />
+          </button>
+
+          <div className="flex items-center gap-1">
+            {[1, 2, 3].map((h) => (
+              <Heart
+                key={h}
+                size={22}
+                className={h <= lives ? "text-error fill-error" : "text-border fill-border"}
+              />
+            ))}
+          </div>
+        </div>
+
+        {/* Segmented progress bar */}
+        <div className="flex gap-1.5">
           {prompts.map((_, i) => (
             <div
               key={i}
               className={cn(
-                "h-2.5 rounded-full transition-all duration-300",
-                i < currentIndex ? "bg-success w-6"
-                  : i === currentIndex ? "bg-primary w-8"
-                  : "bg-border w-2.5"
+                "flex-1 h-4 rounded-full transition-all duration-500",
+                i < currentIndex
+                  ? "bg-success"
+                  : i === currentIndex
+                  ? "bg-primary"
+                  : "bg-border"
               )}
             />
           ))}
         </div>
+      </header>
 
-        {/* Loading state */}
+      {/* ── Main content ──────────────────────────────────── */}
+      <main className="flex-1 flex flex-col items-center justify-center px-5 py-6 gap-5 max-w-lg mx-auto w-full">
+
+        {/* Connecting indicator */}
         {!agoraReady && (
-          <div className="flex flex-col items-center gap-3 mb-6">
+          <div className="flex items-center gap-3 bg-primary/10 border-2 border-primary/20 rounded-2xl px-5 py-3 w-full">
             <div className="flex gap-1">
               {[0, 1, 2].map((i) => (
-                <div
-                  key={i}
-                  className="w-2 h-2 bg-primary rounded-full animate-bounce"
-                  style={{ animationDelay: `${i * 150}ms` }}
-                />
+                <div key={i} className="w-2.5 h-2.5 bg-primary rounded-full animate-bounce"
+                  style={{ animationDelay: `${i * 150}ms` }} />
               ))}
             </div>
-            <p className="text-sm font-body text-muted">Connecting Sparky…</p>
+            <span className="font-body text-sm text-primary font-semibold">
+              Setting up Sparky…
+            </span>
           </div>
         )}
 
-        {/* Agent speaking indicator */}
+        {/* Sparky speech bubble (when agent is speaking) */}
         {agentSpeaking && (
-          <div className="flex items-center justify-center gap-2 bg-primary/10 border border-primary/20 rounded-xl px-4 py-2 mb-4 text-primary text-sm font-body">
-            <Volume2 size={16} className="animate-pulse" />
-            Sparky is speaking…
+          <div className="flex items-end gap-3 w-full animate-pop-up">
+            <div className="text-5xl select-none animate-wiggle">🤖</div>
+            <div className="flex-1 bg-secondary/10 border-2 border-secondary/25 rounded-3xl rounded-bl-sm px-4 py-3">
+              <div className="flex items-center gap-2">
+                <Volume2 size={16} className="text-secondary animate-pulse" />
+                <span className="font-body font-semibold text-secondary text-sm">
+                  Sparky is talking…
+                </span>
+              </div>
+              <p className="text-xs text-muted font-body mt-0.5">Listen carefully! 👂</p>
+            </div>
           </div>
         )}
 
         {/* Phoneme target */}
-        <div className="text-center mb-2">
-          <span className="inline-block bg-secondary/10 text-secondary text-xs font-data font-bold px-3 py-1 rounded-full">
-            Target sound: {currentPrompt.phonemeTarget}
-          </span>
+        <div
+          className="inline-flex items-center gap-2 px-4 py-2 rounded-full border-2 font-data font-extrabold text-sm"
+          style={{ borderColor: "#0EA5A6aa", backgroundColor: "#0EA5A611", color: "#0EA5A6" }}
+        >
+          🎯 Practice sound: <span className="font-extrabold text-base">{prompt.phonemeTarget}</span>
         </div>
 
         {/* Phrase card */}
-        <Card elevated className="text-center mb-6 py-10 border-2 border-primary/10">
-          <div className="text-6xl mb-4">{currentPrompt.imageEmoji}</div>
-          <p className="font-heading font-bold text-3xl text-text leading-tight">
-            {currentPrompt.text}
-          </p>
-        </Card>
-
-        {/* Processing indicator */}
-        {micState === "processing" && (
-          <div className="flex items-center justify-center gap-2 text-primary font-body text-sm mb-4">
-            <div className="flex gap-1">
-              {[0, 1, 2].map((i) => (
-                <div
-                  key={i}
-                  className="w-2 h-2 bg-primary rounded-full animate-bounce"
-                  style={{ animationDelay: `${i * 150}ms` }}
-                />
-              ))}
-            </div>
-            Sending to Sparky…
-          </div>
-        )}
-
-        {/* Mic button */}
-        <div className="flex flex-col items-center gap-4">
-          <button
-            onClick={handleMicToggle}
-            disabled={micState === "processing" || !agoraReady || agentSpeaking}
-            className={cn(
-              "w-20 h-20 rounded-full flex items-center justify-center transition-all duration-200 shadow-lg active:scale-95 disabled:opacity-40",
-              micState === "listening"
-                ? "bg-error animate-pulse shadow-red-200"
-                : "bg-primary hover:bg-primary-dark shadow-primary/30"
-            )}
-          >
-            {micState === "listening" ? (
-              <MicOff className="text-white" size={32} />
-            ) : (
-              <Mic className="text-white" size={32} />
-            )}
-          </button>
-
-          <p className="text-xs font-body text-muted text-center">
-            {!agoraReady && "Setting up your session…"}
-            {agoraReady && agentSpeaking && "Wait for Sparky to finish…"}
-            {agoraReady && !agentSpeaking && micState === "idle" && "Tap the mic and say the phrase!"}
-            {micState === "listening" && "Listening… tap to stop"}
-            {micState === "processing" && "Sparky is thinking…"}
-            {micState === "done" && "Great! What next?"}
+        <div
+          className={cn(
+            "w-full bg-surface rounded-3xl border-4 text-center py-10 px-6 transition-all duration-300 shadow-md",
+            micState === "listening" ? "border-error   shadow-red-100"
+            : micState === "done"   ? "border-success shadow-green-100"
+            : "border-primary/30"
+          )}
+        >
+          <div className="text-8xl mb-5 select-none animate-float">{prompt.imageEmoji}</div>
+          <p className="font-heading font-extrabold text-4xl text-text leading-tight">
+            {prompt.text}
           </p>
 
           {micState === "done" && (
-            <div className="flex gap-3 mt-2">
-              <Button variant="ghost" size="md" onClick={handleRetry}>
-                <RotateCcw size={16} /> Try Again
-              </Button>
-              <Button size="md" onClick={handleNext}>
-                {currentIndex + 1 >= prompts.length ? "Finish" : "Next"}
-                <SkipForward size={16} />
-              </Button>
+            <div className="mt-5 animate-pop-up">
+              <span className="inline-flex items-center gap-2 bg-success/15 text-success border-2 border-success/30 px-5 py-2 rounded-full font-heading font-bold text-sm">
+                ✓ Great try, {childName}!
+              </span>
             </div>
           )}
         </div>
 
-        {/* Progress bar */}
-        <div className="mt-8 w-full h-1.5 bg-border rounded-full overflow-hidden">
-          <div
-            className="h-full bg-primary rounded-full transition-all duration-500"
-            style={{ width: `${progress}%` }}
-          />
+        {/* Processing dots */}
+        {micState === "processing" && (
+          <div className="flex items-center gap-2 text-primary font-body font-semibold text-sm">
+            <div className="flex gap-1">
+              {[0, 1, 2].map((i) => (
+                <div key={i} className="w-2 h-2 bg-primary rounded-full animate-bounce"
+                  style={{ animationDelay: `${i * 150}ms` }} />
+              ))}
+            </div>
+            Sparky is thinking…
+          </div>
+        )}
+
+        {/* Mic area */}
+        <div className="flex flex-col items-center gap-4">
+
+          {/* Big mic button */}
+          <div className="relative">
+            {micState === "listening" && (
+              <>
+                <span className="absolute inset-0 rounded-full bg-error/20 animate-pulse-ring scale-125" />
+                <span className="absolute inset-0 rounded-full bg-error/10 animate-pulse-ring scale-150"
+                  style={{ animationDelay: "0.3s" }} />
+              </>
+            )}
+            <button
+              onClick={handleMicToggle}
+              disabled={disabled}
+              className={cn(
+                "btn-3d relative w-28 h-28 rounded-full flex items-center justify-center disabled:opacity-40 disabled:cursor-not-allowed",
+                micState === "listening"
+                  ? "bg-error shadow-[0_6px_0_#dc2626]"
+                  : "bg-primary shadow-[0_6px_0_#0b8a8b]"
+              )}
+            >
+              {micState === "listening"
+                ? <MicOff className="text-white" size={42} />
+                : <Mic    className="text-white" size={42} />
+              }
+            </button>
+          </div>
+
+          {/* Instruction */}
+          <p className={cn(
+            "font-heading font-bold text-base text-center",
+            micState === "listening" ? "text-error" : "text-text"
+          )}>
+            {!agoraReady                       && "Setting up your session…"}
+            {agoraReady && agentSpeaking       && "Wait for Sparky to finish…"}
+            {agoraReady && !agentSpeaking && micState === "idle"       && "Tap the mic and say it! 🎤"}
+            {agoraReady && !agentSpeaking && micState === "listening"  && "I'm listening… tap to stop! 👂"}
+            {micState === "processing"         && "Sparky is thinking… 🤔"}
+            {micState === "done"               && "Awesome! What's next? 🎉"}
+          </p>
+
+          {/* After-attempt buttons */}
+          {micState === "done" && (
+            <div className="flex gap-3 mt-1 animate-slide-up">
+              <button
+                onClick={handleRetry}
+                className="btn-3d flex items-center gap-2 bg-surface border-2 border-border text-muted px-5 py-3 rounded-2xl font-heading font-bold text-sm shadow-[0_3px_0_#CBD5E1] hover:border-primary hover:text-primary"
+              >
+                <RotateCcw size={16} /> Try Again
+              </button>
+              <button
+                onClick={handleNext}
+                className="btn-3d flex items-center gap-2 bg-success text-white px-7 py-3 rounded-2xl font-heading font-bold text-sm shadow-[0_3px_0_#16a34a]"
+              >
+                {isLast ? "🎉 Finish!" : "Next"}
+                {!isLast && <SkipForward size={16} />}
+              </button>
+            </div>
+          )}
         </div>
-      </div>
-    </main>
+      </main>
+    </div>
   );
 }

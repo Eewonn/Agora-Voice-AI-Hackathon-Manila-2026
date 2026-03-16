@@ -1,4 +1,6 @@
-export type AgeGroup = "early" | "growing" | "preteen";
+import type { AgeGroup } from "@/types";
+
+export type { AgeGroup };
 
 export interface Prompt {
   id: string;
@@ -44,3 +46,10 @@ export function getAgeGroup(age: number): AgeGroup {
   if (age <= 10) return "growing";
   return "preteen";
 }
+
+export const NEXT_DRILLS: Record<string, string> = {
+  pronunciation: "Practice slow, deliberate speaking with the R and S drill",
+  fluency: "Try reading a short sentence out loud three times smoothly",
+  articulation: "Focus on ending sounds — practice words ending in -ck and -t",
+  confidence: "Record yourself saying a tongue twister and play it back",
+};
